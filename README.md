@@ -13,7 +13,7 @@ No keys. No chain. No real money. Just your client's retry behaviour, which is w
 ## 60 seconds
 
 ```bash
-pipx install hostile-facilitator      # or: pip install hostile-facilitator
+pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.0"
 
 # prove the instrument is honest (catches a broken client, clears a safe one):
 hostile-facilitator selftest
