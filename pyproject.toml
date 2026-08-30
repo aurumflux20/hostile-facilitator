@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hostile-facilitator"
+version = "0.1.0"
+description = "Retry-safety conformance battery for x402 payment clients — point your client at a facilitator that fails the way real ones do, and find out in 60s if it double-pays."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "AurumFlux AI, Inc" }]
+keywords = ["x402", "payments", "agent", "idempotency", "retry-safety", "mcp", "conformance"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/aurumflux20/hostile-facilitator"
+Source = "https://github.com/aurumflux20/hostile-facilitator"
+
+[project.scripts]
+hostile-facilitator = "hostile_facilitator.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hostile_facilitator"]
