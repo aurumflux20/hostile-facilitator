@@ -50,3 +50,22 @@ def test_no_stable_id_is_flagged_unsafe():
             try: _post(srv.port, "/settle", {"paymentPayload": {}}, timeout=1.0)
             except Exception: pass
         assert srv.unidentified_calls >= 1   # no idempotency identity = smell
+
+
+def test_battery_over_a_real_subprocess_command(tmp_path):
+    """The `test` path drives an external client process and scores it."""
+    from hostile_facilitator.adapter import battery_over_command
+    broken = tmp_path / "c.py"
+    broken.write_text(
+        "import os,json,urllib.request\n"
+        "u=os.environ['FACILITATOR_URL']\n"
+        "for a in (1,2,3):\n"
+        "  b={'paymentPayload':{'payload':{'authorization':{'nonce':f'n{a}'}}}}\n"
+        "  try:\n"
+        "    urllib.request.urlopen(urllib.request.Request(u+'/settle',data=json.dumps(b).encode(),headers={'Content-Type':'application/json'}),timeout=2);break\n"
+        "  except Exception: continue\n")
+    import sys
+    rows = battery_over_command([sys.executable, str(broken)], client_timeout_s=1.0)
+    # broken client double-pays on ambiguous modes, clean on control
+    assert any(r["mode"] == "clean" and r["passed"] for r in rows)
+    assert any(not r["passed"] and (r["distinct"] or 0) > 1 for r in rows)

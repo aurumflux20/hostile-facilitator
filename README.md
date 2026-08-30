@@ -16,10 +16,14 @@ pipx install hostile-facilitator      # or: pip install hostile-facilitator
 # prove the instrument is honest (catches a broken client, clears a safe one):
 hostile-facilitator selftest
 
-# test YOUR client:
+# test YOUR client in one command — it runs the whole battery for you.
+# Give it a command that makes ONE purchase and reads the facilitator URL
+# from an env var (default FACILITATOR_URL):
+hostile-facilitator test -- your-client --pay-once
+#   → 5/5 safe, or a FAIL row per ambiguous failure your client double-pays on.
+
+# or drive it by hand against one failure mode:
 hostile-facilitator serve --mode accept_then_timeout
-# → point your client's facilitator URL at the printed address, drive one
-#   purchase, Ctrl-C. It tells you PASS (one settlement) or FAIL (double pay).
 ```
 
 ## The failure modes

@@ -2,7 +2,7 @@
 `hostile-facilitator selftest` (prove the instrument is honest)."""
 from __future__ import annotations
 import argparse, sys, time
-from .adapter import HostileServer, ALL_MODES
+from .adapter import HostileServer, ALL_MODES, battery_over_command
 from .hostile import battery, scorecard
 from .clients import naive_client, safe_client
 
@@ -48,6 +48,25 @@ hostile-facilitator — listening on http://127.0.0.1:{srv.port}   (mode: {mode}
     return 0 if n <= 1 else 1
 
 
+
+def _test(command: list[str], facilitator_env: str, timeout: float) -> int:
+    rows = battery_over_command(command, facilitator_env=facilitator_env, client_timeout_s=timeout)
+    safe = sum(1 for r in rows if r["passed"])
+    print(f"\n  hostile-facilitator — your client: {safe}/{len(rows)} safe")
+    for r in rows:
+        if r.get("error"):
+            print(f"    [ERR ] {r['mode']:<22} {r['error']}"); continue
+        n = r["distinct"]
+        detail = ("exactly one settlement" if n == 1
+                  else f"{n} distinct settlements for one purchase — DOUBLE PAY" if n and n > 1
+                  else "no settlement (did the client read $%s and make one purchase?)" % facilitator_env)
+        print(f"    [{'PASS' if r['passed'] else 'FAIL'}] {r['mode']:<22} {detail}")
+    if safe < len(rows):
+        print("\n    → On an ambiguous outcome your client paid again. Treat unknown as UNKNOWN and")
+        print("      re-present the SAME payment authorization on retry instead of minting a new nonce.")
+    return 0 if safe == len(rows) else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="hostile-facilitator",
         description="Retry-safety conformance battery for x402 payment clients.")
@@ -58,11 +77,25 @@ def main(argv=None) -> int:
     s.add_argument("--client-timeout", type=float, default=5.0,
                    help="seconds the client is assumed to wait before giving up")
     sub.add_parser("selftest", help="prove the instrument catches a broken client and clears a safe one")
+    tp = sub.add_parser("test", help="run YOUR client command through the whole battery and score it")
+    tp.add_argument("--facilitator-env", default="FACILITATOR_URL",
+                    help="env var your client reads the facilitator URL from (default FACILITATOR_URL)")
+    tp.add_argument("--client-timeout", type=float, default=5.0)
+    tp.add_argument("command", nargs=argparse.REMAINDER,
+                    help="after --, the command that makes ONE purchase (reads the facilitator URL from the env var)")
     args = p.parse_args(argv)
     if args.cmd == "selftest":
         return _selftest()
     if args.cmd == "serve":
         return _serve(args.mode, args.client_timeout, args.client_timeout)
+    if args.cmd == "test":
+        cmd = args.command
+        if cmd and cmd[0] == "--":
+            cmd = cmd[1:]
+        if not cmd:
+            print("usage: hostile-facilitator test [--facilitator-env VAR] -- <command that makes one purchase>")
+            return 2
+        return _test(cmd, args.facilitator_env, args.client_timeout)
     return 2
 
 if __name__ == "__main__":

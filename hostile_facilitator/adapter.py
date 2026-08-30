@@ -130,3 +130,36 @@ class HostileServer:
     @property
     def distinct_payments(self) -> int:
         return len(self.settled_nonces)
+
+
+# ---- orchestration: run a REAL client command through the whole battery ------
+
+import os, subprocess
+
+def run_client_command(command: list[str], *, facilitator_env: str = "FACILITATOR_URL",
+                       mode: str = CLEAN, client_timeout_s: float = 5.0,
+                       run_timeout_s: float = 30.0) -> "dict":
+    """Start the hostile facilitator in `mode`, point the client at it via an
+    env var, run the client command once (one logical purchase), and read how
+    many distinct payments actually settled. The client must (a) read the
+    facilitator URL from `facilitator_env` and (b) make exactly one purchase."""
+    with HostileServer(mode=mode, client_timeout_s=client_timeout_s) as srv:
+        env = dict(os.environ)
+        env[facilitator_env] = f"http://127.0.0.1:{srv.port}"
+        try:
+            subprocess.run(command, env=env, timeout=run_timeout_s,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except subprocess.TimeoutExpired:
+            pass  # a client that hangs on the ambiguous case still gets scored below
+        except FileNotFoundError as e:
+            return {"mode": mode, "error": f"client command not found: {e}", "distinct": None, "passed": False}
+        n = srv.distinct_payments
+        return {"mode": mode, "distinct": n, "settle_calls": srv.settle_calls,
+                "unidentified": srv.unidentified_calls, "passed": n <= 1}
+
+
+def battery_over_command(command: list[str], *, facilitator_env: str = "FACILITATOR_URL",
+                         client_timeout_s: float = 5.0, run_timeout_s: float = 30.0) -> list[dict]:
+    return [run_client_command(command, facilitator_env=facilitator_env, mode=m,
+                               client_timeout_s=client_timeout_s, run_timeout_s=run_timeout_s)
+            for m in ALL_MODES]
