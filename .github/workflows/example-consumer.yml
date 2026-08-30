@@ -1,0 +1,15 @@
+# Example: add this to YOUR repo (.github/workflows/retry-safety.yml) to gate
+# every PR on retry-safety. Replace the client-command with your own one-purchase script.
+name: Retry-Safety
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - uses: aurumflux20/hostile-facilitator@v0.1.0
+        with:
+          client-command: "python scripts/pay_once.py"   # <- your one-purchase client
+          facilitator-env: "FACILITATOR_URL"

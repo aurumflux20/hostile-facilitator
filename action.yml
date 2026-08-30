@@ -1,0 +1,89 @@
+name: "Retry-Safety Check"
+description: "Fail the PR if your x402 payment client double-pays on an ambiguous facilitator failure."
+author: "AurumFlux AI, Inc"
+branding:
+  icon: "shield"
+  color: "green"
+
+inputs:
+  client-command:
+    description: >-
+      The command that makes ONE purchase, reading the facilitator URL from the
+      env var named by `facilitator-env`. Example: "node ./scripts/pay-once.js".
+    required: true
+  facilitator-env:
+    description: "Env var your client reads the facilitator URL from."
+    required: false
+    default: "FACILITATOR_URL"
+  client-timeout:
+    description: "Seconds your client waits before giving up on a settle."
+    required: false
+    default: "5"
+  comment:
+    description: "Post/update a sticky PR comment with the scorecard (true/false)."
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to post the PR comment."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  safe-count:
+    description: "How many of the failure modes the client handled safely."
+    value: ${{ steps.run.outputs.safe }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install hostile-facilitator (pinned, nothing else fetched at run time)
+      shell: bash
+      run: python3 -m pip install --quiet "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.0"
+
+    - name: Run the retry-safety battery against your client
+      id: run
+      shell: bash
+      env:
+        HF_CMD: ${{ inputs.client-command }}
+        HF_ENV: ${{ inputs.facilitator-env }}
+        HF_TIMEOUT: ${{ inputs.client-timeout }}
+      run: |
+        set +e
+        hostile-facilitator test \
+          --facilitator-env "$HF_ENV" \
+          --client-timeout "$HF_TIMEOUT" \
+          -- $HF_CMD | tee hf-report.txt
+        code=${PIPESTATUS[0]}
+        safe=$(grep -oE '[0-9]+/[0-9]+ safe' hf-report.txt | head -1 | cut -d/ -f1)
+        echo "safe=${safe:-0}" >> "$GITHUB_OUTPUT"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    - name: Sticky PR comment
+      if: ${{ always() && inputs.comment == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+      run: |
+        marker="<!-- hostile-facilitator -->"
+        {
+          echo "$marker"
+          echo "**Retry-safety check** — [hostile-facilitator](https://github.com/aurumflux20/hostile-facilitator)"
+          echo ""
+          echo '```'
+          cat hf-report.txt
+          echo '```'
+        } > /tmp/c.md
+        cid=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+        if [ -n "$cid" ]; then gh api -X PATCH "repos/$REPO/issues/comments/$cid" -F body=@/tmp/c.md >/dev/null
+        else gh api "repos/$REPO/issues/$PR/comments" -F body=@/tmp/c.md >/dev/null; fi
+
+    - name: Enforce the gate
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        if [ "${{ steps.run.outputs.code }}" != "0" ]; then
+          echo "::error::Your payment client double-pays on an ambiguous facilitator failure."
+          exit 1
+        fi
