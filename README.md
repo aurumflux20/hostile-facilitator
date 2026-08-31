@@ -2,9 +2,11 @@
 
 [![Retry-Safety](https://img.shields.io/badge/retry--safety-checked-2ea44f?logo=shieldsdotio)](https://github.com/aurumflux20/hostile-facilitator)
 
-**Point your x402 payment client at a facilitator that fails the way real ones do — and find out in 60 seconds if it double-pays.**
+**An AI agent that pays twice for one order is a refund storm, a chargeback, and a trust problem — and it happens on a dropped connection, not a bug you'd catch in review. This tells you in 60 seconds whether your agent does it.**
 
-A real payment facilitator, at the worst moment, does things that *look* like failure but aren't: it settles the payment and then the connection drops, or it returns a 502 after the money already moved, or it times out after accepting. A correct client treats that ambiguous outcome as **unknown** and, on retry, re-presents the **same** payment authorization so exactly one settlement happens. A broken client mints a fresh nonce on retry — and pays twice.
+Here's the trap. A payment settles on-chain, and *then* the connection drops — a timeout, a 502, whatever. Your client reads that as "failed," retries, and sends a fresh payment. Both go through. Your customer paid twice, and every log on your side shows one clean payment after one transient error. Nobody notices until the refunds start.
+
+The happy path and the clean-failure path both get tested. The settled-but-looks-failed path almost never does — because you need a facilitator that misbehaves on cue. This is that facilitator: it does the worst-moment things real ones do, and counts how many times your agent *actually* paid for one order. One is safe. Two is the money you're about to lose.
 
 `hostile-facilitator` is the adversary. It stands in for the facilitator, deliberately produces each ambiguous failure, and — because every settle passes through it — counts how many distinct payments your client *actually* made for one purchase. One is safe. Two is a real double-charge, caught.
 
