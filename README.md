@@ -77,6 +77,20 @@ Earn the badge for your README once it's green:
 [![Retry-Safety](https://img.shields.io/badge/retry--safety-checked-2ea44f?logo=shieldsdotio)](https://github.com/aurumflux20/hostile-facilitator)
 ```
 
+## If it fails, and you want the whole path checked
+
+This tool tests one purchase against five failure modes. It won't tell you whether the
+*rest* of your money path holds — the reservation lifecycle, every settle-timeout
+branch, or whether what you believe you spent matches what actually settled.
+
+We do that as a fixed-scope **Retry Safety Review**: one money path, five working days,
+a written report tied to your own file and line numbers. **$1,200, refunded in full if
+we find nothing.** [Book it](https://buy.stripe.com/28E7sL91C9naapQbBVdIA0l) ·
+[what's involved](https://github.com/aurumflux20/seal/blob/main/SUPPORT.md)
+
+It's the same reading that found the bugs behind this tool — four projects have shipped
+fixes from it, including a company running 1M+ paid API calls a month.
+
 ---
 
 MIT © AurumFlux AI, Inc — part of the [Seal](https://github.com/aurumflux20/seal) work on exactly-once for agents that move money.
