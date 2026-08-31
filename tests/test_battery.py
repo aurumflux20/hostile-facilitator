@@ -69,3 +69,33 @@ def test_battery_over_a_real_subprocess_command(tmp_path):
     # broken client double-pays on ambiguous modes, clean on control
     assert any(r["mode"] == "clean" and r["passed"] for r in rows)
     assert any(not r["passed"] and (r["distinct"] or 0) > 1 for r in rows)
+
+
+def test_declared_safe_catches_an_over_cautious_gate():
+    """A gate that refuses to replay a tool DECLARED safe is failing in the
+    other direction: it bricks legitimate work. Nothing else in this space
+    tests for over-refusal."""
+    from hostile_facilitator.hostile import run_purchase, DECLARED_SAFE
+
+    def paranoid_client(fac):
+        # Refuses to do anything when it can't be certain — never pays at all.
+        if not fac.declares_safe_to_replay:
+            return None
+        return None  # even when told it's safe, it still refuses
+
+    r = run_purchase(paranoid_client, DECLARED_SAFE)
+    assert not r.passed          # caught
+    assert r.distinct_payments == 0
+    assert "over-cautious" in r.detail
+
+
+def test_reconcile_unavailable_is_terminal_not_absent():
+    """When the reconciliation read itself fails, 'could not determine' must not
+    collapse into 'absent'. A client that retries anyway double-pays."""
+    from hostile_facilitator.hostile import run_purchase, RECONCILE_UNAVAILABLE
+    from hostile_facilitator.clients import naive_client, safe_client
+
+    bad = run_purchase(naive_client, RECONCILE_UNAVAILABLE)
+    good = run_purchase(safe_client, RECONCILE_UNAVAILABLE)
+    assert not bad.passed and bad.distinct_payments > 1   # collapsed unknown -> absent
+    assert good.passed and good.distinct_payments <= 1    # held correctly

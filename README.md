@@ -40,7 +40,16 @@ Each one leaves the world in the same true state — the payment **settled** —
 | `5xx_after_settle` | settles, then returns 502 |
 | `double_402` | re-challenges a request that already paid |
 | `slow_answer` | settles, answers just under the wire |
+| `reconcile_unavailable` | settles ambiguously, **and the "did it land?" read also fails** |
+| `declared_safe` | the tool declares replay is safe — checks you're not *over*-refusing |
 | `clean` | control: settles, answers 200 |
+
+The last two matter because a retry gate fails in two directions. Everything else
+here asks "did you fire twice?" — `declared_safe` asks "did you refuse work that
+was safe?", and `reconcile_unavailable` asks the hardest one: when the effect may
+have landed *and* the read that would tell you is broken, do you hold? "Could not
+determine" is terminal; a client that reads it as "didn't happen" and retries has
+reintroduced the exact double-pay the read exists to prevent.
 
 ## How it recognises a payment
 

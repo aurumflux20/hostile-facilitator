@@ -33,7 +33,19 @@ DOUBLE_402 = "double_402"                     # re-challenge a paid request once
 SLOW_ANSWER = "slow_answer"                   # settle, answer just under the wire
 CLEAN = "clean"                               # control: settle, answer 200
 
-ALL_MODES = [ACCEPT_THEN_TIMEOUT, FIVE_XX_AFTER_SETTLE, DOUBLE_402, SLOW_ANSWER, CLEAN]
+# The reconciliation read itself fails. This is the recursive case: the client is
+# unsure whether the effect landed, asks the provider, and the ASKING fails too.
+# "Could not determine" is terminal — a client that reads it as "absent" and
+# retries reintroduces the exact double-pay the read exists to prevent.
+RECONCILE_UNAVAILABLE = "reconcile_unavailable"
+
+# The control for over-refusal. The tool is declared safe to replay, so a client
+# SHOULD retry freely. A gate that refuses here is the fail-annoying direction:
+# it bricks legitimate work to avoid a duplicate that was never possible.
+DECLARED_SAFE = "declared_safe"
+
+ALL_MODES = [ACCEPT_THEN_TIMEOUT, FIVE_XX_AFTER_SETTLE, DOUBLE_402, SLOW_ANSWER,
+             RECONCILE_UNAVAILABLE, DECLARED_SAFE, CLEAN]
 
 
 @dataclass
@@ -45,6 +57,24 @@ class Facilitator:
     client_timeout_s: float = 0.5
     _settled_nonces: set[str] = field(default_factory=set)   # the on-chain truth
     _settle_calls: int = 0
+    _reconcile_calls: int = 0
+
+    @property
+    def declares_safe_to_replay(self) -> bool:
+        """What the tool declares about itself. Only DECLARED_SAFE says replay is
+        safe; every other mode leaves the effect class unsafe."""
+        return self.mode == DECLARED_SAFE
+
+    def reconcile(self, nonce: str) -> str:
+        """The 'did this land?' read. Returns one of the four verdicts. In
+        RECONCILE_UNAVAILABLE the read itself fails, which MUST surface as
+        'could not determine' and never as 'absent'."""
+        self._reconcile_calls += 1
+        if self.mode == RECONCILE_UNAVAILABLE:
+            raise ReconcileUnavailable("the reconciliation read itself failed")
+        if nonce in self._settled_nonces:
+            return "found_once"
+        return "absent"
 
     def settle(self, nonce: str) -> dict:
         """One settle attempt. Returns what the client observes, and raises the
@@ -62,6 +92,14 @@ class Facilitator:
         if already:
             return {"status": "settled", "replay": True}
 
+        if self.mode == DECLARED_SAFE:
+            # Declared safe to replay: the server dedupes internally, so a replay
+            # is harmless. Answer cleanly; the point is whether the client dares.
+            return {"status": "settled", "replay": False}
+        if self.mode == RECONCILE_UNAVAILABLE:
+            # Ambiguous like accept-then-timeout, but the reconcile read will
+            # also fail — so the client cannot resolve it and must hold.
+            raise ProviderError(504, "gateway timeout (settle may have landed)")
         if self.mode == ACCEPT_THEN_TIMEOUT:
             time.sleep(self.client_timeout_s + 0.2)   # client gives up first
             raise TimeoutError("no response (but the settle already landed)")
@@ -84,6 +122,9 @@ class ProviderError(Exception):
         super().__init__(f"{code} {msg}"); self.code = code
 class Rechallenge(Exception):
     pass
+class ReconcileUnavailable(Exception):
+    """The reconciliation read failed. Verdict is 'could not determine' — terminal."""
+    pass
 class TimeoutError(Exception):  # noqa: A001 - deliberately shadow for a self-contained model
     pass
 
@@ -100,8 +141,18 @@ class Result:
 
 def run_purchase(client_pay, mode: str) -> Result:
     """Drive ONE logical purchase through a client against a facilitator in `mode`.
-    `client_pay(facilitator, nonce_for)` performs the client's own pay+retry logic.
-    We then read the ground truth: how many distinct payments actually settled."""
+    `client_pay(facilitator)` performs the client's own pay+retry logic.
+    We then read the ground truth: how many distinct payments actually settled.
+
+    Most modes ask "did you over-fire?" — one settlement or fewer passes. Two
+    modes invert that, because a gate can fail in both directions:
+
+    * DECLARED_SAFE asks "did you over-REFUSE?" The tool says replay is safe, so
+      a client that never completes the purchase is failing — being too cautious
+      is a real bug, not a conservative virtue.
+    * RECONCILE_UNAVAILABLE asks "did you respect 'could not determine'?" The
+      effect may have landed and the read that would settle it is broken, so the
+      only safe outcome is to hold at one-or-fewer and surface."""
     fac = Facilitator(mode=mode)
     try:
         client_pay(fac)
@@ -110,7 +161,24 @@ def run_purchase(client_pay, mode: str) -> Result:
         # what matters is whether it PAID twice, which we read below.
         pass
     n = fac.distinct_payments
+
+    if mode == DECLARED_SAFE:
+        # Over-refusal check: the purchase must actually complete, exactly once.
+        ok = n == 1
+        detail = ("exactly one settlement" if n == 1
+                  else "never completed a purchase the tool declared safe to replay "
+                       "— gate is over-cautious"
+                  if n == 0 else f"{n} settlements even though dedup was promised")
+        return Result(mode, n, ok, detail)
+
     ok = n <= 1
+    if mode == RECONCILE_UNAVAILABLE:
+        detail = ("held on an unresolvable outcome (correct: 'could not determine' "
+                  "is terminal)" if n <= 1
+                  else f"{n} settlements — retried after the reconciliation read "
+                       f"failed, treating 'could not determine' as 'absent'")
+        return Result(mode, n, ok, detail)
+
     detail = ("exactly one settlement" if n == 1
               else f"{n} distinct settlements for one purchase — DOUBLE PAY"
               if n > 1 else "no settlement")

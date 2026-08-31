@@ -1,6 +1,7 @@
 """Two reference x402 clients, so the battery can be proven honest before it
 judges anyone else's code: it MUST fail the broken one and clear the safe one."""
-from .hostile import ProviderError, Rechallenge, TimeoutError as FacTimeout
+from .hostile import (ProviderError, Rechallenge, ReconcileUnavailable,
+                      TimeoutError as FacTimeout)
 
 # A stable per-purchase authorization identity. In real x402 this is the
 # EIP-3009 nonce / idempotency key the client puts in the payment header.
@@ -31,6 +32,15 @@ def safe_client(fac):
         try:
             return fac.settle(nonce)
         except (FacTimeout, ProviderError, Rechallenge):
-            # Unknown outcome. Re-present the same authorization; do NOT mint new.
+            # Unknown outcome. Before retrying, ask whether it already landed.
+            try:
+                verdict = fac.reconcile(nonce)
+            except ReconcileUnavailable:
+                # "Could not determine" is TERMINAL. We cannot prove the effect
+                # is absent, so we must not retry. Hold and surface.
+                return None
+            if verdict == "found_once":
+                return {"status": "settled", "replay": True}   # settle, don't replay
+            # Authoritatively absent: re-present the SAME authorization.
             continue
     return None
