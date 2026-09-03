@@ -1,0 +1,47 @@
+name: Verification request (paid)
+description: You've paid for a Retry-Safety Review — tell us what to run. Badge on the index within 24h of a clean run.
+title: "Verify: <org/repo>"
+labels: ["verification"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. This is the intake for a paid Retry-Safety Review ($1,200 — https://buy.stripe.com/28E7sL91C9naapQbBVdIA0l). If you haven't paid yet, do that first; we match on the email you used at checkout.
+        What happens next: we read every path where a payment can be signed, sent, or retried, run the seven-mode battery against your client, and reply on this issue with each finding (mechanism, why existing guards don't cover it, minimal fix, the test). A clean run earns a **VERIFIED SAFE · by battery run** row on https://aurumflux.co/retry-safety/ with a badge you can link.
+  - type: input
+    id: repo
+    attributes:
+      label: Repository
+      description: Public URL, or say "private" and we'll send an invite address.
+      placeholder: https://github.com/org/repo
+    validations:
+      required: true
+  - type: input
+    id: purchase_cmd
+    attributes:
+      label: One-purchase command
+      description: A command that makes ONE paid request using your client and reads the facilitator URL from an env var (default FACILITATOR_URL). This is what the battery drives.
+      placeholder: node scripts/buy-once.js
+    validations:
+      required: true
+  - type: dropdown
+    id: rails
+    attributes:
+      label: Rails in scope
+      multiple: true
+      options: [EVM exact (EIP-3009), EVM Permit2 / upto, Solana, Stellar, Other / off-chain]
+  - type: input
+    id: checkout_email
+    attributes:
+      label: Checkout email
+      description: The email used at Stripe checkout (so we can match the payment). Not published.
+    validations:
+      required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Listing
+      options:
+        - label: If the run is clean, list us as VERIFIED SAFE on the index (name + repo + date + version).
+        - label: If findings are open, keep us unnamed on the index until we ship the fix.
+          required: true
