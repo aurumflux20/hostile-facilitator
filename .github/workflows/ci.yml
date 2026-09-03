@@ -13,3 +13,11 @@ jobs:
       - run: python3 -m pytest tests/ -q
       - name: the instrument must stay honest
         run: python3 -m hostile_facilitator.cli selftest
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: LATCH reference model — conformance
+        run: node reference/latch-test.mjs
+      - name: LATCH reference model — its own mutation control
+        # Every property must be destroyable and caught. A suite that cannot
+        # fail cannot pass, and that applies to ours first.
+        run: node reference/latch-mutate.mjs
