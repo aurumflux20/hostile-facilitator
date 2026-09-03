@@ -67,6 +67,64 @@ def _test(command: list[str], facilitator_env: str, timeout: float) -> int:
     return 0 if safe == len(rows) else 1
 
 
+
+def _proof(port: int) -> int:
+    """On-chain proof: settle real EIP-3009 transfers on a local anvil node and
+    count payments from Transfer logs. Removes the "not a live reproduction"
+    caveat from any finding written off this battery."""
+    try:
+        from .chain import Chain, OnChainFacilitator, MERCHANT
+    except Exception as e:                                   # pragma: no cover
+        print(f"on-chain mode unavailable: {e}"); return 2
+    from .hostile import ALL_MODES as MODES, Rechallenge
+
+    def broken(fac, order):
+        try: fac.settle(order)
+        except Exception:
+            try: fac.settle(order + "-retry-fresh-nonce")
+            except Exception: pass
+
+    def safe(fac, order):
+        try: fac.settle(order)
+        except Rechallenge: return
+        except Exception:
+            try:
+                if fac.reconcile(order) == "settled": return
+            except Exception: return
+            try: fac.settle(order)
+            except Exception: pass
+
+    try:
+        chain_cm = Chain(port=port)
+    except Exception as e:
+        print(f"on-chain mode unavailable: {e}"); return 2
+    with chain_cm as ch:
+        print(f"\n  local chain up — token {ch.token}  (anvil :{port})")
+        rows = []
+        for who, fn in (("naive (known-broken)", broken), ("safe (known-correct)", safe)):
+            for mode in MODES:
+                before = ch.transfers()
+                fac = OnChainFacilitator(chain=ch, mode=mode, client_timeout_s=0.2)
+                fn(fac, f"{who[:5]}-{mode}")
+                rows.append((who, mode, ch.transfers() - before))
+        print("\n  hostile-facilitator — ON-CHAIN proof (payments counted from Transfer logs)")
+        for who in ("naive (known-broken)", "safe (known-correct)"):
+            mine = [r for r in rows if r[0] == who]
+            ok = sum(1 for _, m, n in mine if (n == 1 if m == "declared_safe" else n <= 1))
+            print(f"\n    {who}: {ok}/{len(mine)} safe")
+            for _, m, n in mine:
+                good = (n == 1) if m == "declared_safe" else (n <= 1)
+                word = ("exactly one transfer" if n == 1 else
+                        f"{n} REAL transfers for one purchase — DOUBLE PAY" if n > 1 else "no transfer")
+                print(f"      [{'PASS' if good else 'FAIL'}] {m:<22} {word}")
+        naive_fails = sum(1 for w, m, n in rows if w.startswith("naive") and n > 1)
+        safe_ok = all((n == 1 if m == "declared_safe" else n <= 1)
+                      for w, m, n in rows if w.startswith("safe"))
+        print(f"\n  instrument valid on-chain: {naive_fails > 0 and safe_ok}"
+              f"   (broken client double-charged in {naive_fails} mode(s); safe client never did)")
+        return 0 if (naive_fails > 0 and safe_ok) else 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="hostile-facilitator",
         description="Retry-safety conformance battery for x402 payment clients.")
@@ -77,6 +135,8 @@ def main(argv=None) -> int:
     s.add_argument("--client-timeout", type=float, default=5.0,
                    help="seconds the client is assumed to wait before giving up")
     sub.add_parser("selftest", help="prove the instrument catches a broken client and clears a safe one")
+    pr = sub.add_parser("proof", help="on-chain proof: real EIP-3009 transfers on a local anvil node (needs foundry)")
+    pr.add_argument("--port", type=int, default=8555, help="port for the local anvil node")
     tp = sub.add_parser("test", help="run YOUR client command through the whole battery and score it")
     tp.add_argument("--facilitator-env", default="FACILITATOR_URL",
                     help="env var your client reads the facilitator URL from (default FACILITATOR_URL)")
@@ -86,6 +146,8 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "selftest":
         return _selftest()
+    if args.cmd == "proof":
+        return _proof(args.port)
     if args.cmd == "serve":
         return _serve(args.mode, args.client_timeout, args.client_timeout)
     if args.cmd == "test":

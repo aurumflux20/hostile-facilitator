@@ -32,6 +32,38 @@ hostile-facilitator test -- your-client --pay-once
 hostile-facilitator serve --mode accept_then_timeout
 ```
 
+
+## Proof on a real chain
+
+The battery above models settlement in memory — fast and honest, but a finding
+written from it carries a caveat: *not a live reproduction*. `proof` removes the
+caveat. It starts a local [anvil](https://getfoundry.sh) node, deploys an EIP-3009
+token with the same `transferWithAuthorization` / `authorizationState` surface real
+USDC exposes, and settles for real — counting payments from `Transfer` logs on the
+chain rather than from its own bookkeeping.
+
+```bash
+hostile-facilitator proof     # needs foundry: curl -L https://foundry.paradigm.xyz | bash && foundryup
+```
+
+```
+  hostile-facilitator - ON-CHAIN proof (payments counted from Transfer logs)
+
+    naive (known-broken): 3/7 safe
+      [FAIL] accept_then_timeout    2 REAL transfers for one purchase - DOUBLE PAY
+      [FAIL] 5xx_after_settle       2 REAL transfers for one purchase - DOUBLE PAY
+      [FAIL] double_402             2 REAL transfers for one purchase - DOUBLE PAY
+      [FAIL] reconcile_unavailable  2 REAL transfers for one purchase - DOUBLE PAY
+
+    safe (known-correct): 7/7 safe
+
+  instrument valid on-chain: True
+```
+
+Two transfers for one purchase is no longer an argument about control flow: it is
+two entries in a ledger anyone can re-read. `tests/test_chain.py` asserts both
+directions and skips itself when foundry is absent.
+
 ## The failure modes
 
 Each one leaves the world in the same true state — the payment **settled** — and hands your client a signal that's easy to misread as "it failed, try again":
