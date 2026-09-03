@@ -139,6 +139,18 @@ def _norm(raw: Any, http_status: int | None) -> Answer:
     success = raw.get("success")
     if success is None and "settled" in raw:
         success = bool(raw.get("settled"))
+    # x402 v2 settlement-status vocabulary (spec §5.3.3). `status` is
+    # authoritative over `success` where both appear: terminality comes from the
+    # status, never from the code.
+    st = raw.get("status")
+    if isinstance(st, str):
+        s = st.strip().lower()
+        if s == "settled":
+            success = True
+        elif s in ("pending", "deferred_until", "blocked", "canceled", "expired"):
+            success = False
+            if not raw.get("errorReason") and not raw.get("error_reason"):
+                raw = {**raw, "errorReason": s}
     tx = (raw.get("transaction") or raw.get("txHash") or raw.get("tx_hash")
           or raw.get("transactionHash") or raw.get("signature") or None)
     # An empty string is not a hash. This distinction is the whole point of P3.

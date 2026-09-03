@@ -224,3 +224,33 @@ def test_undetermined_is_not_a_pass():
     from hostile_facilitator.hostile_client import ProbeResult
     r = ProbeResult(probe=RE_PRESENT, verdict=UNDETERMINED)
     assert not r.passed and not r.failed
+
+
+# ── x402 v2 settlement-status vocabulary (spec §5.3.3) ────────────────────────
+
+def test_status_settled_is_read_as_success():
+    from hostile_facilitator.hostile_client import _norm
+    a = _norm({"status": "settled", "transaction": "0xabc"}, 200)
+    assert a.success is True and a.tx_hash == "0xabc" and not a.is_terminal_failure
+
+
+@pytest.mark.parametrize("st", ["pending", "deferred_until", "blocked"])
+def test_non_terminal_statuses_are_not_terminal_failures(st):
+    from hostile_facilitator.hostile_client import _norm
+    a = _norm({"status": st, "transaction": "0xabc"}, 200)
+    assert a.success is False
+    assert a.is_terminal_failure is (st != "pending" and "pending" not in st), \
+        "only explicitly pending-ish vocabulary is non-terminal"
+
+
+def test_status_pending_carrying_a_hash_is_reconcilable_not_terminal():
+    from hostile_facilitator.hostile_client import _norm
+    a = _norm({"status": "pending", "transaction": "0xdeadbeef"}, 200)
+    assert a.success is False and a.tx_hash == "0xdeadbeef" and not a.is_terminal_failure
+
+
+def test_status_overrides_a_contradictory_success_flag():
+    """Terminality comes from the status, never from the code (spec §9 note)."""
+    from hostile_facilitator.hostile_client import _norm
+    a = _norm({"success": True, "status": "pending", "transaction": "0x1"}, 200)
+    assert a.success is False and not a.is_terminal_failure
