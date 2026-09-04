@@ -122,6 +122,16 @@ Earn the badge for your README once it's green:
 [![Retry-Safety](https://img.shields.io/badge/retry--safety-checked-2ea44f?logo=shieldsdotio)](https://github.com/aurumflux20/hostile-facilitator)
 ```
 
+## Conformance (x402 §5.3.6)
+
+§5.3.6 of the x402 settlement-status amendment makes a conformance claim *checkable* instead of declarative: name the battery you ran, count **settlements actually recorded** rather than response bodies, and carry a **mutation control** — evidence the same battery fails against an implementation known to be unsafe. The clause that does the work: *a self-administered pass reported without a control is a declaration, not a verification.* (Committed in [zjzJoez/x402#1](https://github.com/zjzJoez/x402/pull/1) against [x402-foundation/x402#3325](https://github.com/x402-foundation/x402/pull/3325); under review, not yet ratified.)
+
+This battery satisfies the first two requirements and ships its own mutation control (`hostile-facilitator selftest`), so you can run it yourself and see exactly where you stand — free, MIT, no signup. That part never costs anything.
+
+What you cannot self-issue is the third-party half. We run the battery against your live facilitator or client and issue a **signed conformance result you can publish**: findings within five business days with any failing case reproduced in full, and a clean run signed within 24 hours.
+
+**Founding rate — the first three implementations to carry a public result: $300** ([checkout](https://buy.stripe.com/14A6oHb9K1UI69A21ldIA0o)), on one condition: the result is published on the [Retry-Safety Index](https://aurumflux.co/retry-safety/), because a verification nobody can check isn't one. Standard rate after the founding three is $1,200.
+
 ## If it fails, and you want the whole path checked
 
 This tool tests one purchase against five failure modes. It won't tell you whether the
