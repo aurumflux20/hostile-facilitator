@@ -254,3 +254,104 @@ def test_status_overrides_a_contradictory_success_flag():
     from hostile_facilitator.hostile_client import _norm
     a = _norm({"success": True, "status": "pending", "transaction": "0x1"}, 200)
     assert a.success is False and not a.is_terminal_failure
+
+
+# ── NOT_APPLICABLE: a config rejection is not a verdict ───────────────────────
+
+class RejectsEverythingFacilitator:
+    """Refuses the request outright — wrong asset, unregistered merchant, etc.
+    Nothing was ever attempted, so there is no retry-safety verdict."""
+    def __init__(self, reason="unsupported_asset", status=200):
+        self.reason, self.status, self.broadcasts = reason, status, 0
+
+    def __call__(self, url, body, *, timeout, abandon_after=None):
+        if abandon_after is not None:
+            return Answer(None, None, None, None, None, abandoned=True)
+        return Answer(self.status, False, None, self.reason, None)
+
+
+@pytest.mark.parametrize("reason", [
+    "unsupported_asset", "invalid_network", "unsupported_scheme",
+    "invalid_payload", "insufficient_funds", "invalid_self_payment",
+])
+def test_config_rejection_is_not_applicable_never_unsafe(reason):
+    from hostile_facilitator.hostile_client import NOT_APPLICABLE
+    results = run(RejectsEverythingFacilitator(reason), probes=[RE_PRESENT])
+    r = results[0]
+    assert r.verdict == NOT_APPLICABLE, f"{reason} must not be graded: {r.detail}"
+    assert not r.passed and not r.failed
+
+
+def test_http_4xx_is_not_applicable():
+    from hostile_facilitator.hostile_client import NOT_APPLICABLE
+    results = run(RejectsEverythingFacilitator("nope", status=400), probes=[RE_PRESENT])
+    assert results[0].verdict == NOT_APPLICABLE
+
+
+def test_amnesiac_is_still_UNSAFE_despite_a_signature_word_on_the_SECOND_answer():
+    """THE BOUNDARY. The amnesiac's first answer is tx_receipt_not_found (a real
+    post-broadcast failure) and only its SECOND says permit_signature_invalid.
+    The never-attempted guard reads the FIRST answer only, so this must still
+    fail — otherwise the guard would launder the exact defect we hunt."""
+    results = run(AmnesiacFacilitator(), probes=[RE_PRESENT])
+    assert results[0].verdict == UNSAFE, results[0].detail
+
+
+def test_a_facilitator_that_rejects_only_the_first_call_is_not_excused_if_it_settles_later():
+    """A hash anywhere means something was attempted; never n/a."""
+    from hostile_facilitator.hostile_client import _never_attempted
+    assert _never_attempted(Answer(200, False, "0xabc", "unsupported_asset", None)) is False
+
+
+@pytest.mark.parametrize("reason", [
+    "tx_receipt_not_found", "receipt_timeout", "settlement_pending",
+    "rpc_connection_error", "tx_nonce_conflict", "already known",
+    "unexpected_settle_error", "bad gateway (settle already landed)",
+])
+def test_network_path_reasons_are_never_excused_as_config(reason):
+    """A reason that names the network path is a verdict, not an excuse. The
+    substring bug this guards against once matched tx_receipt_not_found against
+    'not_found' and would have graded a broken facilitator NOT_APPLICABLE."""
+    from hostile_facilitator.hostile_client import _never_attempted
+    assert _never_attempted(Answer(200, False, None, reason, None)) is False
+
+
+def test_never_attempted_requires_an_exact_code_not_a_substring():
+    from hostile_facilitator.hostile_client import _never_attempted
+    assert _never_attempted(Answer(200, False, None, "unsupported_asset", None)) is True
+    # a longer reason that merely CONTAINS a config code is not a config refusal
+    assert _never_attempted(Answer(200, False, None,
+                                   "settle failed after unsupported_asset retry", None)) is False
+
+
+# ── 5xx is ambiguous, never an accusation ────────────────────────────────────
+
+class CrashingFacilitator:
+    def __init__(self, status=500, reason="unexpected_error"):
+        self.status, self.reason = status, reason
+    def __call__(self, url, body, *, timeout, abandon_after=None):
+        if abandon_after is not None:
+            return Answer(None, None, None, None, None, abandoned=True)
+        return Answer(self.status, False, None, self.reason, None)
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_5xx_with_no_hash_is_undetermined_never_unsafe(status):
+    """A crash while validating and a crash after broadcasting look identical
+    from outside. Grading that UNSAFE is a public accusation we cannot support."""
+    results = run(CrashingFacilitator(status), probes=[RE_PRESENT])
+    r = results[0]
+    assert r.verdict == UNDETERMINED, r.detail
+    assert not r.failed
+
+
+def test_5xx_that_DOES_carry_a_hash_is_still_judged():
+    """If it hands back a broadcast hash, something was attempted and the
+    no-hash excuse does not apply — the ledger question is live again."""
+    class CrashWithHash:
+        def __init__(self): self.n = 0
+        def __call__(self, url, body, *, timeout, abandon_after=None):
+            self.n += 1
+            return Answer(500, False, f"0xtx{self.n}", "unexpected_error", None)
+    results = run(CrashWithHash(), probes=[RE_PRESENT])
+    assert results[0].verdict == UNSAFE and results[0].settlement_count == 2

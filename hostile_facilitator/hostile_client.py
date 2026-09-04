@@ -107,6 +107,53 @@ class Answer:
 SAFE = "SAFE"
 UNSAFE = "UNSAFE"
 UNDETERMINED = "UNDETERMINED"
+NOT_APPLICABLE = "NOT_APPLICABLE"
+
+# Reasons that mean "this request was never accepted as a payment at all" —
+# a validation rejection, not a settlement outcome. If the FIRST presentation
+# comes back with one of these and no hash, nothing was ever attempted, so
+# there is no retry-safety verdict to give. Grading these as UNSAFE would
+# publish a false accusation from what is really a configuration mismatch on
+# our side, which is the one mistake a public grader must never make.
+# Matched EXACTLY against the whole normalized reason — never as a substring.
+# A substring match here is actively dangerous: "not_found" would swallow
+# `tx_receipt_not_found`, which is a real post-broadcast failure and the single
+# most important signal this probe exists to catch. That mistake would grade a
+# broken facilitator "not applicable" and publish it. Add only complete codes.
+_NEVER_ATTEMPTED = frozenset({
+    "invalid_network", "unsupported_network", "unknown_network",
+    "invalid_scheme", "unsupported_scheme",
+    "unsupported_asset", "invalid_asset", "unknown_asset",
+    "invalid_payload", "invalid_payment", "invalid_exact_evm_payload",
+    "malformed", "bad_request", "not_supported", "unsupported",
+    "invalid_amount", "invalid_self_payment", "invalid_recipient",
+    "settlement_disabled", "unauthorized", "forbidden", "unregistered",
+    "insufficient_funds", "insufficient_balance", "insufficient_allowance",
+    "permit_expired", "expired", "verification_failed", "invalid_timing",
+    "invalid_signature", "signature_invalid", "permit_signature_invalid",
+})
+
+# Any of these anywhere in a reason means a transaction reached the network, or
+# might have. Such an answer is a verdict, never a config excuse — this check
+# wins over everything below it.
+_ATTEMPTED_MARKERS = ("receipt", "timeout", "timed_out", "broadcast", "pending",
+                      "settle", "settlement", "nonce_conflict", "already_known",
+                      "rpc", "gateway", "unknown")
+
+
+def _never_attempted(a: "Answer") -> bool:
+    """True when the answer says the request was refused before any payment was
+    attempted. Judged only on the FIRST presentation — the same string arriving
+    on a LATER presentation can be the defect itself (a consumed nonce reported
+    as a bad signature), so this must never be applied to a re-presentation."""
+    if a.tx_hash:
+        return False                      # something was broadcast; it was attempted
+    reason = (a.error_reason or "").strip().lower()
+    if any(m in reason for m in _ATTEMPTED_MARKERS):
+        return False                      # names the network path — that is a verdict
+    if a.http_status in (400, 401, 403, 404, 415, 422):
+        return True
+    return reason in _NEVER_ATTEMPTED
 
 
 @dataclass
@@ -287,6 +334,16 @@ def _judge(r: ProbeResult) -> None:
     n = r.settlement_count
     heard = [a for a in r.answers if not a.abandoned]
     last = heard[-1] if heard else None
+    first = heard[0] if heard else None
+
+    # Before anything else: was a payment ever attempted? A validation rejection
+    # on the first presentation is a configuration mismatch, not a verdict.
+    if n == 0 and first is not None and _never_attempted(first):
+        r.verdict = NOT_APPLICABLE
+        r.detail = (f"request refused before any payment was attempted "
+                    f"(errorReason={first.error_reason!r}, http={first.http_status}) — "
+                    f"no retry-safety verdict is possible from this exchange")
+        return
     # We hung up on a presentation, so its outcome was never observed. Anything
     # it settled is invisible to a hash count — a failed lookup is not a zero.
     blind = any(a.abandoned for a in r.answers)
@@ -295,6 +352,19 @@ def _judge(r: ProbeResult) -> None:
         r.verdict = UNSAFE
         r.detail = (f"{n} distinct settlements for one authorization — DOUBLE SETTLE "
                     f"({', '.join(sorted(s[:14] + '…' for s in r.settlements))})")
+        return
+
+    # A 5xx with no hash on the FIRST presentation is genuinely ambiguous from
+    # outside: the server may have crashed while validating (nothing attempted)
+    # or after broadcasting (the defect). We cannot tell, so we do not say. This
+    # is the difference between a grader and an accuser.
+    if (n == 0 and first is not None and not first.tx_hash
+            and first.http_status is not None and first.http_status >= 500):
+        r.verdict = UNDETERMINED
+        r.detail = (f"server error on the first presentation "
+                    f"(http={first.http_status}, errorReason={first.error_reason!r}) with no hash — "
+                    f"a crash while validating and a crash after broadcasting are "
+                    f"indistinguishable from the client side. No verdict")
         return
 
     # P2/P3: after we presented a payment, a terminal 'no' carrying no hash is
@@ -340,13 +410,16 @@ def _judge(r: ProbeResult) -> None:
 def scorecard(results: list[ProbeResult]) -> str:
     safe = sum(1 for r in results if r.passed)
     unsafe = sum(1 for r in results if r.failed)
-    undet = len(results) - safe - unsafe
+    na = sum(1 for r in results if r.verdict == NOT_APPLICABLE)
+    undet = len(results) - safe - unsafe - na
     head = f"\n  facilitator retry-safety: {safe}/{len(results)} probes safe"
     if undet:
         head += f", {undet} undetermined (not a pass)"
+    if na:
+        head += f", {na} not applicable (never attempted)"
     lines = [head]
     for r in results:
-        tag = {SAFE: "PASS", UNSAFE: "FAIL", UNDETERMINED: "????"}[r.verdict]
+        tag = {SAFE: "PASS", UNSAFE: "FAIL", UNDETERMINED: "????", NOT_APPLICABLE: "n/a "}[r.verdict]
         lines.append(f"    [{tag}] {r.probe:<26} {r.detail}")
     if unsafe:
         lines.append("\n    A facilitator that cannot answer a re-presented authorization "
