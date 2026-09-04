@@ -141,6 +141,25 @@ _ATTEMPTED_MARKERS = ("receipt", "timeout", "timed_out", "broadcast", "pending",
                       "rpc", "gateway", "unknown")
 
 
+# An answer saying the authorization was already consumed is the OPPOSITE of the
+# defect. The category error is reporting "did not happen" about something that
+# did; "nonce already used" reports "this DID happen". A client reading it can
+# tell the two apart and has no reason to re-sign. It is not ideal — §5.3.5 asks
+# that the hash travel with it so the payer can reconcile — but it is not a false
+# negative, and grading it UNSAFE would be an accusation the evidence contradicts.
+# NB: "already known" is deliberately absent — on EVM that is a mempool signal
+# ("this transaction is already submitted"), not a statement that the
+# authorization settled. Conflating the two would excuse a genuinely ambiguous
+# answer.
+_ALREADY_SETTLED = ("already_used", "already used", "nonce_already", "already_settled",
+                    "already settled", "duplicate", "already_processed", "replay",
+                    "authorization_used", "already_exists")
+
+
+def _says_already_settled(a: "Answer") -> bool:
+    return any(w in (a.error_reason or "").lower() for w in _ALREADY_SETTLED)
+
+
 def _never_attempted(a: "Answer") -> bool:
     """True when the answer says the request was refused before any payment was
     attempted. Judged only on the FIRST presentation — the same string arriving
@@ -365,6 +384,19 @@ def _judge(r: ProbeResult) -> None:
                     f"(http={first.http_status}, errorReason={first.error_reason!r}) with no hash — "
                     f"a crash while validating and a crash after broadcasting are "
                     f"indistinguishable from the client side. No verdict")
+        return
+
+    # It told us the authorization was already consumed. That is a true statement
+    # about a settled payment, not an unknown collapsed into a negative, and a
+    # client reading it will not re-sign. Safe — with the §5.3.5 caveat noted.
+    if last is not None and _says_already_settled(last):
+        r.verdict = SAFE
+        r.detail = (f"re-presentation answered {last.error_reason!r} — correctly identifies the "
+                    f"authorization as already consumed, so a client cannot mistake it for "
+                    f"'never settled'"
+                    + ("" if last.tx_hash else
+                       ". Caveat: it carries no transaction hash, so the payer cannot reconcile "
+                       "from this answer alone (§5.3.5 asks that the hash travel with it)"))
         return
 
     # P2/P3: after we presented a payment, a terminal 'no' carrying no hash is

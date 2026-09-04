@@ -355,3 +355,59 @@ def test_5xx_that_DOES_carry_a_hash_is_still_judged():
             return Answer(500, False, f"0xtx{self.n}", "unexpected_error", None)
     results = run(CrashWithHash(), probes=[RE_PRESENT])
     assert results[0].verdict == UNSAFE and results[0].settlement_count == 2
+
+
+# ── "already used" is the OPPOSITE of the defect ─────────────────────────────
+
+class SettlesThenSaysAlreadyUsed:
+    """Settles once, then truthfully reports the authorization as consumed.
+    This is what a correct facilitator without hash-carrying looks like."""
+    def __init__(self, reason="invalid_exact_evm_nonce_already_used"):
+        self.n, self.reason = 0, reason
+    def __call__(self, url, body, *, timeout, abandon_after=None):
+        self.n += 1
+        if abandon_after is not None:
+            return Answer(None, None, None, None, None, abandoned=True)
+        if self.n == 1:
+            return Answer(200, True, "0xsettled_once", None, None)
+        return Answer(200, False, None, self.reason, None)
+
+
+@pytest.mark.parametrize("reason", [
+    "invalid_exact_evm_nonce_already_used", "nonce already used",
+    "authorization_used", "duplicate_payment", "already_settled",
+])
+def test_already_consumed_is_SAFE_not_an_accusation(reason):
+    """Reporting 'this already happened' is the opposite of reporting 'this did
+    not happen'. A client reading it will not re-sign, so it is not the defect."""
+    results = run(SettlesThenSaysAlreadyUsed(reason), probes=[RE_PRESENT])
+    r = results[0]
+    assert r.verdict == SAFE, r.detail
+    assert "already consumed" in r.detail
+
+
+def test_already_consumed_without_a_hash_still_carries_the_caveat():
+    r = run(SettlesThenSaysAlreadyUsed(), probes=[RE_PRESENT])[0]
+    assert "no transaction hash" in r.detail and "5.3.5" in r.detail
+
+
+def test_mempool_already_known_is_NOT_a_settlement_statement():
+    """'already known' means the tx is in the mempool, not that the
+    authorization settled. It must not earn the exemption."""
+    from hostile_facilitator.hostile_client import _says_already_settled
+    assert _says_already_settled(Answer(200, False, None, "already known", None)) is False
+
+
+def test_an_ambiguous_failure_after_settling_is_STILL_unsafe():
+    """THE BOUNDARY. 'transaction_failed' after a successful settle does NOT say
+    the authorization was consumed — a client cannot tell it from 'never
+    settled'. The already-used exemption must not swallow this."""
+    class SettlesThenSaysFailed:
+        def __init__(self): self.n = 0
+        def __call__(self, url, body, *, timeout, abandon_after=None):
+            self.n += 1
+            if self.n == 1:
+                return Answer(200, True, "0xsettled_once", None, None)
+            return Answer(200, False, None, "transaction_failed", None)
+    r = run(SettlesThenSaysFailed(), probes=[RE_PRESENT])[0]
+    assert r.verdict == UNSAFE, r.detail
