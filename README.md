@@ -4,6 +4,8 @@
 
 > This battery is the conformance suite of the draft **MCP retry-safety proposal** ([SEP working draft](https://github.com/YoadElkayam/mcp-fuse/tree/main/sep), discussion [#3188](https://github.com/modelcontextprotocol/modelcontextprotocol/discussions/3188)) — ported into its `tools/call` fixture and used to verify the reference implementation, where it caught two real double-executions before scoring it 7/7.
 
+> **Free to be listed.** [Submit any implementation for grading](https://github.com/aurumflux20/hostile-facilitator/issues/new?template=submit.yml) — yours or someone else's — and it gets read and put on the public [Retry-Safety Index](https://aurumflux.co/retry-safety/) at no cost. If a finding is confirmed you are **counted, never named**, until you ship a fix; when you do, the row goes up with credit and your time-to-fix. Only a full battery run against a *live* system is paid, and nothing above requires it.
+
 **An AI agent that pays twice for one order is a refund storm, a chargeback, and a trust problem — and it happens on a dropped connection, not a bug you'd catch in review. This tells you in 60 seconds whether your agent does it.**
 
 Here's the trap. A payment settles on-chain, and *then* the connection drops — a timeout, a 502, whatever. Your client reads that as "failed," retries, and sends a fresh payment. Both go through. Your customer paid twice, and every log on your side shows one clean payment after one transient error. Nobody notices until the refunds start.

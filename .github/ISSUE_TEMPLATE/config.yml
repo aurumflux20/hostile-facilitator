@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Retry-Safety Index
+  - name: The Retry-Safety Index
     url: https://aurumflux.co/retry-safety/
-    about: The public register — who pays once when the answer is lost.
+    about: The public register — who pays once when the answer is lost. Free to be listed.
+  - name: Check yourself first, offline
+    url: https://github.com/aurumflux20/hostile-facilitator#quick-start
+    about: MIT, runs locally, ships with a mutation control so you can confirm it can fail before you trust it passing you.

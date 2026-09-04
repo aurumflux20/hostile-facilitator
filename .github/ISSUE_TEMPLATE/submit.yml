@@ -1,0 +1,89 @@
+name: Submit an implementation for grading (free)
+description: Get your agent-payment client, facilitator or SDK on the public Retry-Safety Index. Free, no payment, no account.
+title: "Grade: <org/repo>"
+labels: ["submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This is free and always will be.** Submit anything that signs, sends, settles or retries an agent payment — your own project or someone else's — and it gets read and graded on the public register: https://aurumflux.co/retry-safety/
+
+        **What you get back, at no cost:**
+
+        - A verdict on one question: *does it pay once when the answer is lost?*
+        - If something is wrong: the mechanism, the file and line, why your existing guards don't cover it, and a failing test. Yours to fix, no strings.
+        - A row on the Index either way.
+
+        **What happens if it fails.** You are **counted, never named**, until you ship a fix — that rule is enforced by a gate in this repo, not by our goodwill. When you fix it, the row goes up **with credit and your time-to-fix as the headline**, because shipping a money-path fix quickly is the thing worth recording. If you would rather not appear at all, say so below and you won't.
+
+        **What costs money, and only this:** a full battery run against your *live* system, which we can't do without your cooperation, earning a **VERIFIED SAFE · by battery run** row and a badge you can display. That's the paid tier and it is not required for anything above.
+
+        Every verdict states its own ceiling. A code read is labelled a code read; a battery run is labelled a battery run. We will not claim more than we measured.
+
+  - type: input
+    id: repo
+    attributes:
+      label: Repository or endpoint
+      description: A public repo URL, or a facilitator base URL. Someone else's is fine — we'll disclose to them first, not publish first.
+      placeholder: https://github.com/org/repo
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - Client / payer (an agent or SDK that pays)
+        - Facilitator / resource server (something that settles)
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rails
+    attributes:
+      label: Rails or rails-equivalent
+      multiple: true
+      options:
+        - EVM exact (EIP-3009)
+        - EVM Permit2 / upto
+        - Solana
+        - Stellar
+        - Card / PSP API (Stripe, Adyen, PayPal, Square, …)
+        - Metered billing / usage events
+        - MCP tool calls that move money
+        - Other / off-chain
+
+  - type: textarea
+    id: path
+    attributes:
+      label: Where does the money actually move?
+      description: The file, function or endpoint that signs, sends or settles. Optional — we'll find it — but naming it makes the read sharper.
+      placeholder: |
+        src/payments/settle.ts — settlePayment(), the receipt wait after broadcast
+        or: POST /settle on https://facilitator.example.com
+
+  - type: input
+    id: run_once
+    attributes:
+      label: A command that makes exactly ONE paid request
+      description: Only needed if you want it driven rather than read. Should take the facilitator URL from an env var (default FACILITATOR_URL).
+      placeholder: node scripts/buy-once.js
+
+  - type: dropdown
+    id: naming
+    attributes:
+      label: If a finding is confirmed, before you've fixed it
+      options:
+        - Count me, don't name me (default — this is what we do anyway)
+        - Don't list me at all
+    validations:
+      required: true
+
+  - type: textarea
+    id: anything
+    attributes:
+      label: Anything else
+      description: Known limits, a boundary you've already documented, a claim you'd like tested. Naming your own honest limit up front is the single strongest signal we see.
