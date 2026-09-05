@@ -134,17 +134,22 @@ What you cannot self-issue is the third-party half. We run the battery against y
 
 ## If it fails, and you want the whole path checked
 
-This tool tests one purchase against five failure modes. It won't tell you whether the
-*rest* of your money path holds — the reservation lifecycle, every settle-timeout
-branch, or whether what you believe you spent matches what actually settled.
+This tool tests one purchase against the ambiguous-failure battery. It won't tell you whether the
+*rest* of your money path holds — the reservation lifecycle, every settle-timeout branch, or
+whether what you believe you spent matches what actually settled.
 
-We do that as a fixed-scope **Retry Safety Review**: one money path, five working days,
-a written report tied to your own file and line numbers. **$1,200, refunded in full if
-we find nothing.** [Book it](https://buy.stripe.com/28E7sL91C9naapQbBVdIA0l) ·
-[what's involved](https://github.com/aurumflux20/seal/blob/main/SUPPORT.md)
+Two ways to take it further, both written-only, no calls:
 
-It's the same reading that found the bugs behind this tool — four projects have shipped
-fixes from it, including a company running 1M+ paid API calls a month.
+- **Attestation run — $1,200.** We run the full battery against your *live* endpoint and issue a
+  signed result you can publish. Findings within five business days; a clean run signed within
+  24 hours. [Checkout](https://buy.stripe.com/28E7sL91C9naapQbBVdIA0l)
+- **Money-path review — $12,000, fixed scope.** Every path that moves or counts money, each one
+  graded, the unsafe ones with a failing case that reproduces it — file and line, 7–10 days.
+  **If we can't show you a real double-fire on a path you actually run, there is no invoice.**
+  [Details](https://aurumflux.co/)
+
+It's the same reading that found the bugs behind this tool — four projects have shipped fixes
+from it, including a company running 1M+ paid API calls a month.
 
 ---
 
