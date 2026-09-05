@@ -38,7 +38,7 @@ runs:
   steps:
     - name: Install hostile-facilitator (pinned, nothing else fetched at run time)
       shell: bash
-      run: python3 -m pip install --quiet "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.0"
+      run: python3 -m pip install --quiet "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.1"
 
     - name: Run the retry-safety battery against your client
       id: run
