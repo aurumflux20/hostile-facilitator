@@ -16,10 +16,28 @@ The happy path and the clean-failure path both get tested. The settled-but-looks
 
 No keys. No chain. No real money. Just your client's retry behaviour, which is where the bug lives.
 
+
+## Sign the result
+
+`test --json` writes the run as data, so it can be signed and re-checked
+instead of trusted:
+
+```bash
+hostile-facilitator test --json result.json -- ./make-one-purchase.sh
+coherence conformance result.json --out session.json
+coherence attest --session session.json --key <key> --anchor rekor
+```
+
+A mode where the client settled twice is recorded as unfinished work, never as
+a pass — so a failing run cannot be signed as clean, by you or by us. Worked
+example, including the attempt to launder a failure into a pass:
+[coherence/examples/conformance](https://github.com/aurumflux20/coherence/tree/main/examples/conformance).
+
+
 ## 60 seconds
 
 ```bash
-pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.1"
+pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.1.2"
 
 # prove the instrument is honest (catches a broken client, clears a safe one):
 hostile-facilitator selftest
@@ -110,7 +128,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - uses: aurumflux20/hostile-facilitator@v0.1.1
+      - uses: aurumflux20/hostile-facilitator@v0.1.2
         with:
           client-command: "python scripts/pay_once.py"   # your one-purchase client
 ```

@@ -2,4 +2,4 @@
 from .hostile import battery, scorecard, ALL_MODES, Facilitator
 from .adapter import HostileServer
 __all__ = ["battery", "scorecard", "ALL_MODES", "Facilitator", "HostileServer"]
-__version__ = "0.1.0"
+__version__ = "0.1.2"

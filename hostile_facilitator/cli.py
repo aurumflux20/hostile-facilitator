@@ -1,10 +1,48 @@
 """CLI: `hostile-facilitator serve` (test any client over the wire) and
 `hostile-facilitator selftest` (prove the instrument is honest)."""
 from __future__ import annotations
-import argparse, sys, time
+import argparse, json, sys, time
+from pathlib import Path
 from .adapter import HostileServer, ALL_MODES, battery_over_command
 from .hostile import battery, scorecard
 from .clients import naive_client, safe_client
+
+
+def _utc(ts: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def result_document(command, rows, *, facilitator_env: str, started: float, finished: float) -> dict:
+    """The run as data, not as terminal output.
+
+    A printed scorecard cannot be signed, cannot be re-checked, and cannot be
+    handed to anyone who wasn't watching the terminal. This is the same run in
+    a form a third party can verify: which battery version produced it, what
+    command was driven, and per mode how many DISTINCT settlements landed for
+    one purchase. Nothing here is a judgement — `passed` is `distinct <= 1`,
+    the same rule the scorecard prints.
+    """
+    from . import __version__
+    failed = [r["mode"] for r in rows if not r.get("passed")]
+    doubles = [r["mode"] for r in rows if (r.get("distinct") or 0) > 1]
+    errors = [r["mode"] for r in rows if r.get("error")]
+    return {
+        "tool": "hostile-facilitator",
+        "version": __version__,
+        "schema": "https://aurumflux.co/hostile-facilitator/result/v1",
+        "target": {"command": list(command), "facilitator_env": facilitator_env},
+        "battery": {"modes": list(ALL_MODES), "count": len(ALL_MODES)},
+        "started_at": _utc(started),
+        "finished_at": _utc(finished),
+        "results": rows,
+        "summary": {
+            "safe": sum(1 for r in rows if r.get("passed")),
+            "total": len(rows),
+            "verdict": "PASS" if not failed else "FAIL",
+            "double_paying_modes": doubles,
+            "errored_modes": errors,
+        },
+    }
 
 
 def _selftest() -> int:
@@ -49,8 +87,10 @@ hostile-facilitator — listening on http://127.0.0.1:{srv.port}   (mode: {mode}
 
 
 
-def _test(command: list[str], facilitator_env: str, timeout: float) -> int:
+def _test(command: list[str], facilitator_env: str, timeout: float, json_out: str = "") -> int:
+    started = time.time()
     rows = battery_over_command(command, facilitator_env=facilitator_env, client_timeout_s=timeout)
+    finished = time.time()
     safe = sum(1 for r in rows if r["passed"])
     print(f"\n  hostile-facilitator — your client: {safe}/{len(rows)} safe")
     for r in rows:
@@ -64,6 +104,16 @@ def _test(command: list[str], facilitator_env: str, timeout: float) -> int:
     if safe < len(rows):
         print("\n    → On an ambiguous outcome your client paid again. Treat unknown as UNKNOWN and")
         print("      re-present the SAME payment authorization on retry instead of minting a new nonce.")
+    if json_out:
+        doc = result_document(command, rows, facilitator_env=facilitator_env,
+                              started=started, finished=finished)
+        out = Path(json_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        print(f"\n  result written: {json_out}")
+        print("  sign it so a third party can check the claim without trusting the runner:")
+        print(f"    coherence conformance {json_out} --out session.json")
+        print("    coherence attest --session session.json --key <key> --anchor rekor")
     return 0 if safe == len(rows) else 1
 
 
@@ -141,6 +191,8 @@ def main(argv=None) -> int:
     tp.add_argument("--facilitator-env", default="FACILITATOR_URL",
                     help="env var your client reads the facilitator URL from (default FACILITATOR_URL)")
     tp.add_argument("--client-timeout", type=float, default=5.0)
+    tp.add_argument("--json", default="", dest="json_out", metavar="PATH",
+                    help="also write the run as a machine-readable result file (signable, re-checkable)")
     tp.add_argument("command", nargs=argparse.REMAINDER,
                     help="after --, the command that makes ONE purchase (reads the facilitator URL from the env var)")
     args = p.parse_args(argv)
@@ -157,7 +209,7 @@ def main(argv=None) -> int:
         if not cmd:
             print("usage: hostile-facilitator test [--facilitator-env VAR] -- <command that makes one purchase>")
             return 2
-        return _test(cmd, args.facilitator_env, args.client_timeout)
+        return _test(cmd, args.facilitator_env, args.client_timeout, args.json_out)
     return 2
 
 if __name__ == "__main__":
