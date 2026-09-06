@@ -1,6 +1,0 @@
-# Publishes to PyPI via Trusted Publishing (OIDC) — no token stored anywhere,
-# in this repo or on PyPI. Fires when a version tag is pushed.
-name: Publish to PyPI
-
-on:
-  workflow_dispatch:
