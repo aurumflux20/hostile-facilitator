@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hostile-facilitator"
-version = "0.1.2"
+version = "0.2.0"
 description = "Retry-safety conformance battery for x402 payment clients — point your client at a facilitator that fails the way real ones do, and find out in 60s if it double-pays."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -46,7 +46,7 @@ hostile-facilitator selftest
 # Give it a command that makes ONE purchase and reads the facilitator URL
 # from an env var (default FACILITATOR_URL):
 hostile-facilitator test -- your-client --pay-once
-#   → 5/5 safe, or a FAIL row per ambiguous failure your client double-pays on.
+#   → 10/10 safe, or a FAIL row per ambiguous failure your client double-pays on.
 
 # or drive it by hand against one failure mode:
 hostile-facilitator serve --mode accept_then_timeout
@@ -75,7 +75,7 @@ hostile-facilitator proof     # needs foundry: curl -L https://foundry.paradigm.
       [FAIL] double_402             2 REAL transfers for one purchase - DOUBLE PAY
       [FAIL] reconcile_unavailable  2 REAL transfers for one purchase - DOUBLE PAY
 
-    safe (known-correct): 7/7 safe
+    safe (known-correct): 10/10 safe
 
   instrument valid on-chain: True
 ```
@@ -94,16 +94,56 @@ Each one leaves the world in the same true state — the payment **settled** —
 | `5xx_after_settle` | settles, then returns 502 |
 | `double_402` | re-challenges a request that already paid |
 | `slow_answer` | settles, answers just under the wire |
-| `reconcile_unavailable` | settles ambiguously, **and the "did it land?" read also fails** |
+| `reconcile_unavailable` | settles ambiguously, **and the "did it land?" read also fails** — loudly, with a 503 |
+| `reconcile_soft_404` | the read answers **HTTP 200 with prose**: "not available at this time" |
+| `reconcile_oversized` | the record **is** in the body, past a buffer a naive read won't survive |
+| `reconcile_truncated` | the body is cut mid-record, so the parse yields nothing |
 | `declared_safe` | the tool declares replay is safe — checks you're not *over*-refusing |
 | `clean` | control: settles, answers 200 |
 
-The last two matter because a retry gate fails in two directions. Everything else
-here asks "did you fire twice?" — `declared_safe` asks "did you refuse work that
-was safe?", and `reconcile_unavailable` asks the hardest one: when the effect may
-have landed *and* the read that would tell you is broken, do you hold? "Could not
+`declared_safe` matters because a retry gate fails in two directions. Everything
+else here asks "did you fire twice?" — it asks "did you refuse work that was
+safe?" Bricking legitimate work to avoid an impossible duplicate is a real bug,
+not a conservative virtue.
+
+The four `reconcile_*` modes ask the hardest question: when the effect may have
+landed *and* the read that would tell you is broken, do you hold? "Could not
 determine" is terminal; a client that reads it as "didn't happen" and retries has
 reintroduced the exact double-pay the read exists to prevent.
+
+Only the first of those four announces itself. The other three are the half that
+actually ships, and they come from [solim](https://github.com/modelcontextprotocol/modelcontextprotocol/discussions/3188)
+on the SEP discussion, out of two production bugs: a `grep -q` gate whose SIGPIPE
+became exit 141 under `pipefail` and was read as "no match" — but only once the
+body grew past the 64KB pipe buffer, so a **present** record reported as absent
+precisely when there was more evidence to read; and a `grep -c` counter, where
+"genuinely zero" and "the command failed" arrive as the same value with the same
+status. Neither is exotic. Both are the default idiom in the language they were
+written in.
+
+The generalisation, and the rule the battery now tests: **a reconcile read must
+be able to return three values — settled, not settled, and read failed — and
+"read failed" must not be collapsed into "not settled" by the client's own
+plumbing.** That defect lives below the protocol, which is why nothing upstream
+catches it.
+
+### The instrument check
+
+`reconcile_controls()` exercises your reconciliation checker against a case that
+**must** answer settled and one that **must** answer not-settled. solim's rule:
+*a checker validated only against the negative is indistinguishable from a
+function that returns a constant* — which is what both of theirs were. Until a
+checker has been shown capable of both answers, every "absent" it has ever
+returned is unevidenced.
+
+### Holding is not the same as proving
+
+Over HTTP the reconcile modes are scored with a third state, `not_exercised`. A
+client that takes the ambiguous 504 and simply gives up has not double-paid — but
+it also never performed the read, so the run proves nothing about its read path.
+Reporting that as "safe" would be a verdict the evidence cannot support, which is
+the same false-pass shape this battery exists to catch. It is reported as its own
+state instead, and never counted as a pass.
 
 ## How it recognises a payment
 

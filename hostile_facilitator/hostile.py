@@ -18,6 +18,7 @@ harness models directly. The point is the client's retry behaviour, which is
 where the bug lives.
 """
 from __future__ import annotations
+import json
 import time
 from dataclasses import dataclass, field
 
@@ -39,13 +40,31 @@ CLEAN = "clean"                               # control: settle, answer 200
 # retries reintroduces the exact double-pay the read exists to prevent.
 RECONCILE_UNAVAILABLE = "reconcile_unavailable"
 
+# The half of that class which actually ships. Here the reconciliation read does
+# NOT raise — it returns, with a success status, carrying something that is not
+# an answer. Every one of these is settled in truth, so a client that derives
+# "absent" from a failed parse, an empty match or a status code pays twice.
+#
+# Origin: solim, MCP discussion #3188 (9 Sep 2026), from two production bugs —
+# `grep -q` under `pipefail` turning SIGPIPE into 141 and reading it as "no
+# match" above the 64KB pipe buffer, and `grep -c` returning 1 for a zero count,
+# conflating "genuinely none" with "the command failed".
+RECONCILE_SOFT_404 = "reconcile_soft_404"     # HTTP 200 + "not available" prose
+RECONCILE_OVERSIZED = "reconcile_oversized"   # record present, body past the buffer
+RECONCILE_TRUNCATED = "reconcile_truncated"   # body cut mid-record; parse yields nothing
+
 # The control for over-refusal. The tool is declared safe to replay, so a client
 # SHOULD retry freely. A gate that refuses here is the fail-annoying direction:
 # it bricks legitimate work to avoid a duplicate that was never possible.
 DECLARED_SAFE = "declared_safe"
 
+# Modes where the reconciliation read is the thing under test. The first is the
+# clean half (the read fails loudly); the other three are the success-shaped half.
+RECONCILE_MODES = [RECONCILE_UNAVAILABLE, RECONCILE_SOFT_404,
+                   RECONCILE_OVERSIZED, RECONCILE_TRUNCATED]
+
 ALL_MODES = [ACCEPT_THEN_TIMEOUT, FIVE_XX_AFTER_SETTLE, DOUBLE_402, SLOW_ANSWER,
-             RECONCILE_UNAVAILABLE, DECLARED_SAFE, CLEAN]
+             *RECONCILE_MODES, DECLARED_SAFE, CLEAN]
 
 
 @dataclass
@@ -65,10 +84,51 @@ class Facilitator:
         safe; every other mode leaves the effect class unsafe."""
         return self.mode == DECLARED_SAFE
 
+    def reconcile_raw(self, nonce: str) -> tuple[int, bytes]:
+        """The read as it arrives on the wire, before anyone interprets it.
+
+        This is the surface the plumbing bugs live on: in the three
+        success-shaped modes the status is 200 and nothing raises, so a client
+        that trusts the status, or that treats a failed parse as "absent",
+        convicts itself here rather than at the provider."""
+        self._reconcile_calls += 1
+        settled = nonce in self._settled_nonces
+        record = {"found": settled, "nonce": nonce if settled else None}
+
+        if self.mode == RECONCILE_SOFT_404:
+            # 200 with prose. No status code carries the bad news.
+            return 200, (b"<html><body><h1>Record</h1><p>The record you requested "
+                         b"is Not Available at this time. Please try again.</p>"
+                         b"</body></html>")
+        if self.mode == RECONCILE_OVERSIZED:
+            # The record IS here. There is simply more body than a buffered read
+            # survives — so "absent" gets reported precisely when there was MORE
+            # evidence to read, which is what made solim's take days to surface.
+            head = json.dumps(record).encode()
+            filler = b'{"unrelated":"' + (b"x" * (6 * 1024 * 1024)) + b'"}'
+            return 200, head + b"\n" + filler
+        if self.mode == RECONCILE_TRUNCATED:
+            body = json.dumps(record).encode()
+            return 200, body[: max(1, len(body) // 2)]   # cut mid-record
+
+        if self.mode == RECONCILE_UNAVAILABLE:
+            raise ReconcileUnavailable("the reconciliation read itself failed")
+        return 200, json.dumps(record).encode()
+
     def reconcile(self, nonce: str) -> str:
-        """The 'did this land?' read. Returns one of the four verdicts. In
-        RECONCILE_UNAVAILABLE the read itself fails, which MUST surface as
-        'could not determine' and never as 'absent'."""
+        """The 'did this land?' read as a VERDICT — the tri-state solim argues
+        for: found / absent / could-not-determine, where the third is terminal
+        and is never collapsed into the second.
+
+        Every success-shaped non-answer maps to 'could not determine'. Answering
+        'absent' from a soft-404, an oversized body or a truncated parse is the
+        defect this mode exists to catch, so the reference read must not do it."""
+        if self.mode in (RECONCILE_SOFT_404, RECONCILE_OVERSIZED,
+                         RECONCILE_TRUNCATED):
+            self.reconcile_raw(nonce)   # count the call; the answer is unusable
+            raise ReconcileUnavailable(
+                f"the reconciliation read returned a success-shaped non-answer "
+                f"({self.mode}) — could not determine, which is terminal")
         self._reconcile_calls += 1
         if self.mode == RECONCILE_UNAVAILABLE:
             raise ReconcileUnavailable("the reconciliation read itself failed")
@@ -96,9 +156,11 @@ class Facilitator:
             # Declared safe to replay: the server dedupes internally, so a replay
             # is harmless. Answer cleanly; the point is whether the client dares.
             return {"status": "settled", "replay": False}
-        if self.mode == RECONCILE_UNAVAILABLE:
+        if self.mode in (RECONCILE_UNAVAILABLE, RECONCILE_SOFT_404,
+                         RECONCILE_OVERSIZED, RECONCILE_TRUNCATED):
             # Ambiguous like accept-then-timeout, but the reconcile read will
-            # also fail — so the client cannot resolve it and must hold.
+            # also fail to give a usable answer — so the client cannot resolve
+            # it and must hold. The money HAS moved; only the news is lost.
             raise ProviderError(504, "gateway timeout (settle may have landed)")
         if self.mode == ACCEPT_THEN_TIMEOUT:
             time.sleep(self.client_timeout_s + 0.2)   # client gives up first
@@ -172,11 +234,15 @@ def run_purchase(client_pay, mode: str) -> Result:
         return Result(mode, n, ok, detail)
 
     ok = n <= 1
-    if mode == RECONCILE_UNAVAILABLE:
+    if mode in RECONCILE_MODES:
+        if mode == RECONCILE_UNAVAILABLE:
+            how = "failed"
+        else:
+            how = "returned a success-shaped non-answer"
         detail = ("held on an unresolvable outcome (correct: 'could not determine' "
                   "is terminal)" if n <= 1
                   else f"{n} settlements — retried after the reconciliation read "
-                       f"failed, treating 'could not determine' as 'absent'")
+                       f"{how}, collapsing 'could not determine' into 'absent'")
         return Result(mode, n, ok, detail)
 
     detail = ("exactly one settlement" if n == 1
@@ -199,3 +265,48 @@ def scorecard(results: list[Result], label: str) -> str:
         lines.append("    → On an ambiguous outcome, a retry minted a fresh nonce and paid again.")
         lines.append("      The fix: treat unknown as UNKNOWN, re-present the SAME authorization on retry.")
     return "\n".join(lines)
+
+
+# ---- the instrument check ---------------------------------------------------
+
+def reconcile_controls(client_reconcile) -> tuple[bool, str]:
+    """Exercise a client's OWN reconciliation checker against a case that must
+    answer 'settled' and one that must answer 'not settled'.
+
+    solim's rule, on MCP discussion #3188: *a checker validated only against the
+    negative is indistinguishable from a function that returns a constant.* Both
+    of their production bugs passed every negative test they had, because both
+    only ever returned the negative.
+
+    This is the mutation control applied to the read itself: before any verdict
+    from a reconciliation checker means anything, the checker has to be shown
+    capable of producing both answers.
+
+    `client_reconcile(facilitator, nonce)` returns the client's verdict string.
+    """
+    # Positive control: the payment really did settle, and the read is clean.
+    pos = Facilitator(mode=CLEAN)
+    pos.settle("nonce-present")
+    try:
+        got_pos = client_reconcile(pos, "nonce-present")
+    except Exception as exc:
+        return False, (f"positive control: checker raised {exc!r} on a record that "
+                       f"is definitely present")
+    if got_pos != "found_once":
+        return False, (f"positive control FAILED: a settled record read as "
+                       f"{got_pos!r}. A checker that cannot say 'found' is "
+                       f"indistinguishable from one that returns a constant, and "
+                       f"every 'absent' it has ever returned is unevidenced.")
+
+    # Negative control: nothing was ever settled, and the read is clean.
+    neg = Facilitator(mode=CLEAN)
+    try:
+        got_neg = client_reconcile(neg, "nonce-never-settled")
+    except Exception as exc:
+        return False, f"negative control: checker raised {exc!r} on an absent record"
+    if got_neg != "absent":
+        return False, (f"negative control FAILED: an unsettled record read as "
+                       f"{got_neg!r} — the checker cannot say 'not settled', so it "
+                       f"will hold forever on payments that never happened.")
+
+    return True, "reconciliation checker can return both answers"
