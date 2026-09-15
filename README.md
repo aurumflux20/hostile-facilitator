@@ -188,6 +188,8 @@ This battery satisfies the first two requirements and ships its own mutation con
 
 What you cannot self-issue is the third-party half. We run the battery against your live facilitator or client and issue a **signed conformance result you can publish**: findings within five business days with any failing case reproduced in full, and a clean run signed within 24 hours.
 
+**Self-run, signed — $99, first ten servers** ([checkout](https://buy.stripe.com/5kQeVd0v67f2fKabBVdIA0q)). You run this battery against your own server and send us `result.json` and `session.json`; we sign and anchor the result in Sigstore so a reader can verify it without trusting either of us. No call, no scheduling. A failing mode is recorded **open, never proven** — a failing run cannot be signed green by anyone, including us. This is the cheapest rung and the only one that needs nothing from us but a signature.
+
 **Founding rate — the first three implementations to carry a public result: $300** ([checkout](https://buy.stripe.com/14A6oHb9K1UI69A21ldIA0o)), on one condition: the result is published on the [Retry-Safety Index](https://aurumflux.co/retry-safety/), because a verification nobody can check isn't one. Standard rate after the founding three is $1,200.
 
 ## If it fails, and you want the whole path checked
