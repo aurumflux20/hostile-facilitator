@@ -37,7 +37,9 @@ example, including the attempt to launder a failure into a pass:
 ## 60 seconds
 
 ```bash
-pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.2.0"
+pip install hostile-facilitator
+# or straight from source:
+# pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.2.1"
 
 # prove the instrument is honest (catches a broken client, clears a safe one):
 hostile-facilitator selftest
@@ -168,7 +170,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - uses: aurumflux20/hostile-facilitator@v0.2.0
+      - uses: aurumflux20/hostile-facilitator@v0.2.1
         with:
           client-command: "python scripts/pay_once.py"   # your one-purchase client
 ```
