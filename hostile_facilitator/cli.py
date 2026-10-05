@@ -3,13 +3,21 @@
 from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
-from .adapter import HostileServer, ALL_MODES, battery_over_command
-from .hostile import battery, scorecard
+from .adapter import HostileServer, ALL_MODES, battery_over_command, run_client_command
+from .hostile import CLEAN, battery, scorecard
 from .clients import naive_client, safe_client
 
 
 def _utc(ts: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+
+
+def _verdict(r: dict) -> str:
+    """pass | fail | not_exercised | error. Rows written before verdicts
+    existed fall back to the old distinct<=1 rule."""
+    if r.get("error"):
+        return "error"
+    return r.get("verdict") or ("pass" if r.get("passed") else "fail")
 
 
 def result_document(command, rows, *, facilitator_env: str, started: float, finished: float) -> dict:
@@ -19,28 +27,46 @@ def result_document(command, rows, *, facilitator_env: str, started: float, fini
     handed to anyone who wasn't watching the terminal. This is the same run in
     a form a third party can verify: which battery version produced it, what
     command was driven, and per mode how many DISTINCT settlements landed for
-    one purchase. Nothing here is a judgement — `passed` is `distinct <= 1`,
-    the same rule the scorecard prints.
+    one purchase.
+
+    It never claims more than the run measured. A mode the client never
+    reached is not counted safe, and a run whose clean control did not settle
+    exactly once is INVALID: the command never made a normal purchase, so
+    "no double payment" in the other modes means nothing.
     """
     from . import __version__
-    failed = [r["mode"] for r in rows if not r.get("passed")]
+    clean = next((r for r in rows if r.get("mode") == CLEAN), {})
+    harness_valid = clean.get("distinct") == 1
+    verdicts = [(r["mode"], _verdict(r)) for r in rows]
+    failed = [m for m, v in verdicts if v in ("fail", "error")]
+    skipped = [m for m, v in verdicts if v == "not_exercised"]
     doubles = [r["mode"] for r in rows if (r.get("distinct") or 0) > 1]
-    errors = [r["mode"] for r in rows if r.get("error")]
+    errors = [m for m, v in verdicts if v == "error"]
+    if not harness_valid:
+        verdict = "INVALID"
+    elif failed:
+        verdict = "FAIL"
+    elif skipped:
+        verdict = "INCOMPLETE"
+    else:
+        verdict = "PASS"
     return {
         "tool": "hostile-facilitator",
         "version": __version__,
         "schema": "https://aurumflux.co/hostile-facilitator/result/v1",
         "target": {"command": list(command), "facilitator_env": facilitator_env},
         "battery": {"modes": list(ALL_MODES), "count": len(ALL_MODES)},
+        "harness": {"valid": harness_valid, "clean_control_settlements": clean.get("distinct")},
         "started_at": _utc(started),
         "finished_at": _utc(finished),
         "results": rows,
         "summary": {
-            "safe": sum(1 for r in rows if r.get("passed")),
+            "safe": sum(1 for _, v in verdicts if v == "pass") if harness_valid else 0,
             "total": len(rows),
-            "verdict": "PASS" if not failed else "FAIL",
+            "verdict": verdict,
             "double_paying_modes": doubles,
             "errored_modes": errors,
+            "not_exercised_modes": skipped,
         },
     }
 
@@ -87,34 +113,59 @@ hostile-facilitator — listening on http://127.0.0.1:{srv.port}   (mode: {mode}
 
 
 
+def _write_json(json_out, command, rows, facilitator_env, started):
+    doc = result_document(command, rows, facilitator_env=facilitator_env,
+                          started=started, finished=time.time())
+    out = Path(json_out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    print(f"\n  result written: {json_out}")
+    return doc
+
+
 def _test(command: list[str], facilitator_env: str, timeout: float, json_out: str = "") -> int:
+    """Exit 0: no double payment seen. 1: a double payment (or an error).
+    2: the harness is invalid, so nothing was scored."""
     started = time.time()
-    rows = battery_over_command(command, facilitator_env=facilitator_env, client_timeout_s=timeout)
-    finished = time.time()
-    safe = sum(1 for r in rows if r["passed"])
+    # The clean control runs first. If one normal purchase does not settle
+    # exactly once, the command is not making a purchase through us, and every
+    # other mode would read "no double payment" for the wrong reason.
+    clean = run_client_command(command, facilitator_env=facilitator_env, mode=CLEAN,
+                               client_timeout_s=timeout)
+    if clean.get("distinct") != 1:
+        got = clean.get("error") or f"{clean.get('distinct')} settlement(s)"
+        print(f"\n  hostile-facilitator — HARNESS INVALID: the clean control produced {got}, expected exactly 1.")
+        print(f"    Nothing was scored. Check that the command reads ${facilitator_env}, makes one")
+        print("    purchase, and that its seller accepts this facilitator's replies.")
+        if json_out:
+            _write_json(json_out, command, [clean], facilitator_env, started)
+        return 2
+    rest = battery_over_command(command, facilitator_env=facilitator_env, client_timeout_s=timeout,
+                                modes=[m for m in ALL_MODES if m != CLEAN])
+    rows = rest + [clean]
+    safe = sum(1 for r in rows if _verdict(r) == "pass")
     print(f"\n  hostile-facilitator — your client: {safe}/{len(rows)} safe")
     for r in rows:
-        if r.get("error"):
+        v = _verdict(r)
+        if v == "error":
             print(f"    [ERR ] {r['mode']:<22} {r['error']}"); continue
         n = r["distinct"]
+        if v == "not_exercised":
+            print(f"    [----] {r['mode']:<22} held, but never asked whether the payment landed — not counted safe")
+            continue
         detail = ("exactly one settlement" if n == 1
                   else f"{n} distinct settlements for one purchase — DOUBLE PAY" if n and n > 1
-                  else "no settlement (did the client read $%s and make one purchase?)" % facilitator_env)
-        print(f"    [{'PASS' if r['passed'] else 'FAIL'}] {r['mode']:<22} {detail}")
-    if safe < len(rows):
+                  else "no settlement")
+        print(f"    [{'PASS' if v == 'pass' else 'FAIL'}] {r['mode']:<22} {detail}")
+    if any(_verdict(r) in ("fail", "error") for r in rows):
         print("\n    → On an ambiguous outcome your client paid again. Treat unknown as UNKNOWN and")
         print("      re-present the SAME payment authorization on retry instead of minting a new nonce.")
     if json_out:
-        doc = result_document(command, rows, facilitator_env=facilitator_env,
-                              started=started, finished=finished)
-        out = Path(json_out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-        print(f"\n  result written: {json_out}")
+        _write_json(json_out, command, rows, facilitator_env, started)
         print("  sign it so a third party can check the claim without trusting the runner:")
         print(f"    coherence conformance {json_out} --out session.json")
         print("    coherence attest --session session.json --key <key> --anchor rekor")
-    return 0 if safe == len(rows) else 1
+    return 1 if any(_verdict(r) in ("fail", "error") for r in rows) else 0
 
 
 

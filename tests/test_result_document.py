@@ -30,7 +30,8 @@ def test_document_names_the_version_that_produced_it():
 def test_clean_run_is_a_pass_with_no_double_paying_modes():
     d = _doc(PASS_ROWS)
     assert d["summary"] == {"safe": len(ALL_MODES), "total": len(ALL_MODES),
-                            "verdict": "PASS", "double_paying_modes": [], "errored_modes": []}
+                            "verdict": "PASS", "double_paying_modes": [], "errored_modes": [],
+                            "not_exercised_modes": []}
 
 
 def test_one_double_payment_makes_the_whole_run_fail_and_names_the_mode():

@@ -39,7 +39,7 @@ example, including the attempt to launder a failure into a pass:
 ```bash
 pip install hostile-facilitator
 # or straight from source:
-# pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.2.1"
+# pip install "git+https://github.com/aurumflux20/hostile-facilitator@v0.2.2"
 
 # prove the instrument is honest (catches a broken client, clears a safe one):
 hostile-facilitator selftest
@@ -147,6 +147,31 @@ Reporting that as "safe" would be a verdict the evidence cannot support, which i
 the same false-pass shape this battery exists to catch. It is reported as its own
 state instead, and never counted as a pass.
 
+### A run that never purchased is not a score
+
+`test` runs the `clean` control first. If one ordinary purchase does not settle
+exactly once, the command is not buying through the hostile facilitator — a
+wrong env var, a seller that rejected our replies — and "no double payment" in
+every other mode would be true for the wrong reason. The run stops there,
+prints `HARNESS INVALID`, writes `"verdict": "INVALID"` to `--json`, and exits 2.
+
+## Testing a real x402 seller
+
+The facilitator speaks the x402 v2 wire format: `GET /supported`, and
+`/verify` / `/settle` replies the official SDK models parse (`success`,
+`transaction`, `network`, `payer`). The battery's timeout is exported as
+`HOSTILE_CLIENT_TIMEOUT`; set your seller's facilitator timeout from it, or the
+timeout modes never time out (the x402 Python SDK defaults to 90s).
+
+A complete harness for the official Python SDK — FastAPI seller, httpx buyer,
+throwaway key, no chain — is in
+[`examples/x402-python/pay_once.py`](examples/x402-python/pay_once.py):
+
+```bash
+pip install "x402[fastapi,evm,clients]" uvicorn
+hostile-facilitator test --client-timeout 3 -- python examples/x402-python/pay_once.py
+```
+
 ## How it recognises a payment
 
 Your client's stable payment identity — an EIP-3009 `authorization.nonce`, a top-level `nonce`, or an `Idempotency-Key` header — is how the facilitator knows a re-presented payment from a brand-new one. A client that sends **no** stable identity can't be safe under retries, and the tool says so.
@@ -170,7 +195,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - uses: aurumflux20/hostile-facilitator@v0.2.1
+      - uses: aurumflux20/hostile-facilitator@v0.2.2
         with:
           client-command: "python scripts/pay_once.py"   # your one-purchase client
 ```

@@ -23,7 +23,7 @@ This file implements (1): a tiny stdlib http.server that IS the hostile
 facilitator, so any language's client can be tested over the wire.
 """
 from __future__ import annotations
-import json, time, threading
+import hashlib, json, time, threading
 from urllib.parse import unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -50,6 +50,43 @@ def _extract_nonce(body: dict, headers) -> str | None:
         if isinstance(payload, dict) and payload.get(k):
             return str(payload[k])
     return None
+
+
+# What /supported advertises. A real x402 seller asks for this before it will
+# take a payment, so without it the seller never starts and nothing is tested.
+SUPPORTED = {
+    "kinds": [
+        {"x402Version": 2, "scheme": "exact", "network": "eip155:84532"},
+        {"x402Version": 2, "scheme": "exact", "network": "eip155:8453"},
+        {"x402Version": 1, "scheme": "exact", "network": "base-sepolia"},
+        {"x402Version": 1, "scheme": "exact", "network": "base"},
+    ],
+    "extensions": [],
+    "signers": {},
+}
+
+
+def _x402_parts(body: dict) -> tuple[str, str | None]:
+    """(network, payer) from a verify/settle request, in v2 or v1 shape."""
+    payload = body.get("paymentPayload") if isinstance(body.get("paymentPayload"), dict) else {}
+    reqs = body.get("paymentRequirements") if isinstance(body.get("paymentRequirements"), dict) else {}
+    accepted = payload.get("accepted") if isinstance(payload.get("accepted"), dict) else {}
+    network = reqs.get("network") or accepted.get("network") or payload.get("network") or "eip155:84532"
+    auth = (payload.get("payload") or {}).get("authorization") if isinstance(payload.get("payload"), dict) else None
+    payer = auth.get("from") if isinstance(auth, dict) else None
+    return str(network), payer
+
+
+def _settled(body: dict, nonce: str, replay: bool = False) -> dict:
+    """A success reply in the x402 v2 SettleResponse shape. The transaction id is
+    derived from the nonce, so a re-presented payment gets back the SAME one.
+    `status` stays for clients written against the earlier reply."""
+    network, payer = _x402_parts(body)
+    out = {"success": True, "transaction": "0x" + hashlib.sha256(nonce.encode()).hexdigest(),
+           "network": network, "payer": payer, "status": "settled"}
+    if replay:
+        out["replay"] = True
+    return out
 
 
 class _QuietServer(ThreadingHTTPServer):
@@ -136,8 +173,11 @@ class HostileServer:
                 return self._json(200, {"found": settled, "nonce": nonce})
 
             def do_GET(self):
-                if self.path.split("?", 1)[0].rstrip("/").endswith("/reconcile"):
+                route = self.path.split("?", 1)[0].rstrip("/")
+                if route.endswith("/reconcile"):
                     return self._reconcile()
+                if route.endswith("/supported"):
+                    return self._json(200, SUPPORTED)
                 return self._json(404, {"error": "unknown route"})
 
             def _raw(self, code, body: bytes, ctype="application/json",
@@ -161,7 +201,7 @@ class HostileServer:
                 if path.endswith("/reconcile"):
                     return self._reconcile()
                 if path.endswith("/verify"):
-                    return self._json(200, {"isValid": True})
+                    return self._json(200, {"isValid": True, "payer": _x402_parts(body)[1]})
                 if not path.endswith("/settle"):
                     return self._json(404, {"error": "unknown route"})
                 server.settle_calls += 1
@@ -173,14 +213,14 @@ class HostileServer:
                 if not already:
                     server.settled_nonces.add(nonce)         # the money moves, once per nonce
                 if already:
-                    return self._json(200, {"status":"settled","replay":True})
+                    return self._json(200, _settled(body, nonce, replay=True))
                 m = server.mode
                 if m == ACCEPT_THEN_TIMEOUT:
                     time.sleep(server.client_timeout_s + 1.0)   # outlast the client
-                    return self._json(200, {"status":"settled"})  # client already gone
+                    return self._json(200, _settled(body, nonce))  # client already gone
                 if m == SLOW_ANSWER:
                     time.sleep(max(0.0, server.client_timeout_s - 0.3))
-                    return self._json(200, {"status":"settled"})
+                    return self._json(200, _settled(body, nonce))
                 if m == FIVE_XX_AFTER_SETTLE:
                     return self._json(502, {"error":"bad gateway (settle already landed)"})
                 if m == DOUBLE_402:
@@ -189,7 +229,7 @@ class HostileServer:
                     # The money moved; the news is lost. The client must now ask
                     # /reconcile — and that read is the thing on trial.
                     return self._json(504, {"error":"gateway timeout (settle may have landed)"})
-                return self._json(200, {"status":"settled"})
+                return self._json(200, _settled(body, nonce))
         return H
 
     def __enter__(self):
@@ -216,10 +256,16 @@ def run_client_command(command: list[str], *, facilitator_env: str = "FACILITATO
     """Start the hostile facilitator in `mode`, point the client at it via an
     env var, run the client command once (one logical purchase), and read how
     many distinct payments actually settled. The client must (a) read the
-    facilitator URL from `facilitator_env` and (b) make exactly one purchase."""
+    facilitator URL from `facilitator_env` and (b) make exactly one purchase.
+
+    HOSTILE_CLIENT_TIMEOUT carries the timeout the battery assumes. The
+    timeout modes only test something if the client really gives up at that
+    point, so a harness should set its facilitator timeout from it (the x402
+    Python SDK's default is 90s, far past any mode here)."""
     with HostileServer(mode=mode, client_timeout_s=client_timeout_s) as srv:
         env = dict(os.environ)
         env[facilitator_env] = f"http://127.0.0.1:{srv.port}"
+        env["HOSTILE_CLIENT_TIMEOUT"] = str(client_timeout_s)
         try:
             subprocess.run(command, env=env, timeout=run_timeout_s,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -245,10 +291,11 @@ def run_client_command(command: list[str], *, facilitator_env: str = "FACILITATO
 
 
 def battery_over_command(command: list[str], *, facilitator_env: str = "FACILITATOR_URL",
-                         client_timeout_s: float = 5.0, run_timeout_s: float = 30.0) -> list[dict]:
+                         client_timeout_s: float = 5.0, run_timeout_s: float = 30.0,
+                         modes: list[str] | None = None) -> list[dict]:
     return [run_client_command(command, facilitator_env=facilitator_env, mode=m,
                                client_timeout_s=client_timeout_s, run_timeout_s=run_timeout_s)
-            for m in ALL_MODES]
+            for m in (ALL_MODES if modes is None else modes)]
 
 
 def summarize(results: list[dict], label: str) -> str:
