@@ -1,0 +1,17 @@
+{
+  "name": "hostile-facilitator-x402-ts-example",
+  "private": true,
+  "type": "module",
+  "description": "One purchase through the official x402 TypeScript SDK (@x402/fetch -> @x402/express), for hostile-facilitator test.",
+  "scripts": {
+    "battery": "hostile-facilitator test --client-timeout 3 -- node pay-once.mjs"
+  },
+  "dependencies": {
+    "@x402/core": "2.28.0",
+    "@x402/evm": "2.28.0",
+    "@x402/express": "2.28.0",
+    "@x402/fetch": "2.28.0",
+    "express": "^5.1.0",
+    "viem": "^2.0.0"
+  }
+}

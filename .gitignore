@@ -3,3 +3,7 @@ build/
 *.egg-info/
 __pycache__/
 .venv/
+
+# example harness installs
+examples/**/node_modules/
+examples/**/package-lock.json
